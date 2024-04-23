@@ -22,11 +22,12 @@ def make_transforms(
     color_jitter=1.0,
     horizontal_flip=False,
     color_distortion=False,
+    image_resize=False,
     gaussian_blur=False,
-    normalization=((0.485, 0.456, 0.406),
-                   (0.229, 0.224, 0.225))
+    normalization=((0.4626, 0.3126, 0.2504), 
+                   (0.3195, 0.2506, 0.2205))
 ):
-    logger.info('making imagenet data transforms')
+    logger.info('making endoscopy data transforms')
 
     def get_color_distortion(s=1.0):
         # s is the strength of color distortion.
@@ -39,7 +40,10 @@ def make_transforms(
         return color_distort
 
     transform_list = []
-    transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
+    if not image_resize:
+        transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
+    else:
+        transform_list += [transforms.Resize(crop_size)]
     if horizontal_flip:
         transform_list += [transforms.RandomHorizontalFlip()]
     if color_distortion:

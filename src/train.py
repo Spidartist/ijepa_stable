@@ -23,11 +23,10 @@ import sys
 import yaml
 
 import numpy as np
-
+import wandb
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
-from torch.nn.parallel import DistributedDataParallel
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
 from src.masks.utils import apply_masks
@@ -41,7 +40,7 @@ from src.utils.logging import (
     grad_logger,
     AverageMeter)
 from src.utils.tensors import repeat_interleave_batch
-from src.datasets.imagenet1k import make_imagenet1k
+from src.datasets.polyp import make_polyp
 
 from src.helper import (
     load_checkpoint,
@@ -89,6 +88,7 @@ def main(args, resume_preempt=False):
     use_horizontal_flip = args['data']['use_horizontal_flip']
     use_color_distortion = args['data']['use_color_distortion']
     color_jitter = args['data']['color_jitter_strength']
+    image_resize = args['data']['image_resize']
     # --
     batch_size = args['data']['batch_size']
     pin_mem = args['data']['pin_mem']
@@ -158,6 +158,19 @@ def main(args, resume_preempt=False):
                            ('%.5f', 'mask-B'),
                            ('%d', 'time (ms)'))
 
+    wandb.login(key="cca12c93cb17351580e3f9fd5136347e65a3463d")
+    wandb.init(
+        project="ijepa-polyp-16",
+        config={
+            "wd": wd,
+            "patch_size": patch_size,
+            "model_name": model_name,
+            "batch_size": batch_size,
+            "warmup": warmup,
+            "lr": lr,
+        },
+    )
+
     # -- init model
     encoder, predictor = init_model(
         device=device,
@@ -186,10 +199,11 @@ def main(args, resume_preempt=False):
         gaussian_blur=use_gaussian_blur,
         horizontal_flip=use_horizontal_flip,
         color_distortion=use_color_distortion,
+        image_resize=image_resize,
         color_jitter=color_jitter)
 
     # -- init data-loaders/samplers
-    _, unsupervised_loader, unsupervised_sampler = make_imagenet1k(
+    _, unsupervised_loader = make_polyp(
             transform=transform,
             batch_size=batch_size,
             collator=mask_collator,
@@ -218,9 +232,7 @@ def main(args, resume_preempt=False):
         num_epochs=num_epochs,
         ipe_scale=ipe_scale,
         use_bfloat16=use_bfloat16)
-    encoder = DistributedDataParallel(encoder, static_graph=True)
-    predictor = DistributedDataParallel(predictor, static_graph=True)
-    target_encoder = DistributedDataParallel(target_encoder)
+
     for p in target_encoder.parameters():
         p.requires_grad = False
 
@@ -267,9 +279,6 @@ def main(args, resume_preempt=False):
     for epoch in range(start_epoch, num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
-        # -- update distributed-data-loader epoch
-        unsupervised_sampler.set_epoch(epoch)
-
         loss_meter = AverageMeter()
         maskA_meter = AverageMeter()
         maskB_meter = AverageMeter()
@@ -279,7 +288,7 @@ def main(args, resume_preempt=False):
 
             def load_imgs():
                 # -- unsupervised imgs
-                imgs = udata[0].to(device, non_blocking=True)
+                imgs = udata.to(device, non_blocking=True)
                 masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
                 masks_2 = [u.to(device, non_blocking=True) for u in masks_pred]
                 return (imgs, masks_1, masks_2)
@@ -357,6 +366,15 @@ def main(args, resume_preempt=False):
                                    _new_lr,
                                    torch.cuda.max_memory_allocated() / 1024.**2,
                                    time_meter.avg))
+
+                    wandb.log(
+                        {
+                            "epoch": epoch + 1,
+                            "loss": loss_meter.avg,
+                            "wd": _new_wd,
+                            "lr": _new_lr,
+                        }
+                    )
 
                     if grad_stats is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
