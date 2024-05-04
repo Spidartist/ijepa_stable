@@ -1,3 +1,3 @@
 python main.py \
-  --fname configs/polyp_vith16_ep400_new.yaml \
-  --devices cuda:1
+  --fname configs/endo_vith16_ep300_resize.yaml \
+  --devices cuda:0

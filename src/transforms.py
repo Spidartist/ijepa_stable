@@ -43,7 +43,8 @@ def make_transforms(
     if not image_resize:
         transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
     else:
-        transform_list += [transforms.Resize(crop_size)]
+        print("Use Resize!!!")
+        transform_list += [transforms.Resize((crop_size, crop_size))]
     if horizontal_flip:
         transform_list += [transforms.RandomHorizontalFlip()]
     if color_distortion:

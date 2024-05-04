@@ -1,10 +1,10 @@
 data:
-  batch_size: 64
+  batch_size: 32
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
   - 1.0
-  crop_size: 256
+  crop_size: 448
   image_folder: /mnt/tuyenld/data/endoscopy/
   num_workers: 6
   pin_mem: true
@@ -14,7 +14,7 @@ data:
   use_horizontal_flip: false
   image_resize: true
 logging:
-  folder: /mnt/quanhd/ijepa/logs/
+  folder: /mnt/quanhd/ijepa_stable/logs/
   write_tag: jepa
 mask:
   allow_overlap: false
