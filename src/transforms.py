@@ -40,11 +40,11 @@ def make_transforms(
         return color_distort
 
     transform_list = []
-    if not image_resize:
-        transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
-    else:
+    if image_resize:
         print("Use Resize!!!")
-        transform_list += [transforms.Resize((crop_size, crop_size))]
+        transform_list += [transforms.Resize(int(crop_size/0.875))]
+    transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
+        
     if horizontal_flip:
         transform_list += [transforms.RandomHorizontalFlip()]
     if color_distortion:
