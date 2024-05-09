@@ -2,8 +2,8 @@ data:
   batch_size: 16
   color_jitter_strength: 0.0
   crop_scale:
-  - 0.3
-  - 1.0
+  - 0.6
+  - 0.9
   crop_size: 448
   image_folder: /mnt/tuyenld/data/endoscopy/
   num_workers: 6
