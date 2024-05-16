@@ -77,6 +77,8 @@ def main(args, resume_preempt=False):
     copy_data = args['meta']['copy_data']
     pred_depth = args['meta']['pred_depth']
     pred_emb_dim = args['meta']['pred_emb_dim']
+    use_register = args['meta']['use_register']
+    num_registers = args['meta']['num_registers']
     if not torch.cuda.is_available():
         device = torch.device('cpu')
     else:
@@ -178,7 +180,9 @@ def main(args, resume_preempt=False):
         crop_size=crop_size,
         pred_depth=pred_depth,
         pred_emb_dim=pred_emb_dim,
-        model_name=model_name)
+        model_name=model_name,
+        use_register=use_register,
+        num_registers=num_registers)
     target_encoder = copy.deepcopy(encoder)
 
     # -- make data transforms

@@ -8,7 +8,7 @@
 import math
 from functools import partial
 import numpy as np
-
+from einops import repeat, unpack, pack
 import torch
 import torch.nn as nn
 
@@ -294,7 +294,7 @@ class VisionTransformerPredictor(nn.Module):
         # -- Batch Size
         B = len(x) // len(masks_x)
 
-        # -- map from encoder-dim to pedictor-dim
+        # -- map from encoder-dim to predictor-dim
         x = self.predictor_embed(x)
 
         # -- add positional embedding to x tokens
@@ -346,6 +346,8 @@ class VisionTransformer(nn.Module):
         drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
         init_std=0.02,
+        use_register=False,
+        num_registers=4,
         **kwargs
     ):
         super().__init__()
@@ -372,6 +374,12 @@ class VisionTransformer(nn.Module):
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
+        self.use_register = use_register
+        if self.use_register:
+            #register tokens
+            self.register_tokens = nn.Parameter(
+                torch.randn(num_registers, embed_dim)
+            )
         # ------
         self.init_std = init_std
         self.apply(self._init_weights)
@@ -415,9 +423,24 @@ class VisionTransformer(nn.Module):
         if masks is not None:
             x = apply_masks(x, masks)
 
+        if self.use_register:
+            #repeat register token
+            r = repeat(
+                self.register_tokens, 
+                'n d -> b n d', 
+                b=B
+            )
+
+            #pack cls token and register token
+            x, ps = pack([x, r], 'b * d ')
+
         # -- fwd prop
         for i, blk in enumerate(self.blocks):
             x = blk(x)
+
+        if self.use_register:
+            #unpack cls token and register token
+            x, _ = unpack(x, ps, 'b * d')
 
         if self.norm is not None:
             x = self.norm(x)
@@ -448,10 +471,12 @@ def vit_predictor(**kwargs):
     return model
 
 
-def vit_tiny(patch_size=16, **kwargs):
+def vit_tiny(patch_size=16, use_register=False,
+        num_registers=4, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_register=use_register,
+        num_registers=num_registers, **kwargs)
     return model
 
 
@@ -462,10 +487,12 @@ def vit_small(patch_size=16, **kwargs):
     return model
 
 
-def vit_base(patch_size=16, **kwargs):
+def vit_base(patch_size=16, use_register=False,
+        num_registers=4, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_register=use_register,
+        num_registers=num_registers, **kwargs)
     return model
 
 
@@ -476,10 +503,12 @@ def vit_large(patch_size=16, **kwargs):
     return model
 
 
-def vit_huge(patch_size=16, **kwargs):
+def vit_huge(patch_size=16, use_register=False,
+        num_registers=4, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_register=use_register,
+        num_registers=num_registers, **kwargs)
     return model
 
 
