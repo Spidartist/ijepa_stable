@@ -85,9 +85,7 @@ def init_model(
         embed_dim=encoder.embed_dim,
         predictor_embed_dim=pred_emb_dim,
         depth=pred_depth,
-        num_heads=encoder.num_heads,
-        use_register=use_register,
-        num_registers=num_registers)
+        num_heads=encoder.num_heads)
 
     def init_weights(m):
         if isinstance(m, torch.nn.Linear):
