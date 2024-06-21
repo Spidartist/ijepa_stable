@@ -208,12 +208,13 @@ class ConvEmbed(nn.Module):
         stem += [nn.Conv2d(channels[-2], channels[-1], kernel_size=1, stride=strides[-1])]
         self.stem = nn.Sequential(*stem)
 
-        # Comptute the number of patches
+        # Compute the number of patches
         stride_prod = int(np.prod(strides))
-        self.num_patches = (img_size[0] // stride_prod)**2
+        self.num_patches = (img_size // stride_prod)**2
 
     def forward(self, x):
         p = self.stem(x)
+        # print(p.flatten(2).transpose(1, 2).shape)
         return p.flatten(2).transpose(1, 2)
 
 
@@ -348,17 +349,25 @@ class VisionTransformer(nn.Module):
         init_std=0.02,
         use_register=False,
         num_registers=4,
+        type_embed="patch",
         **kwargs
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.num_heads = num_heads
         # --
-        self.patch_embed = PatchEmbed(
-            img_size=img_size[0],
-            patch_size=patch_size,
-            in_chans=in_chans,
-            embed_dim=embed_dim)
+        if type_embed == "conv":
+            print("Use conv embed")
+            self.patch_embed = ConvEmbed(
+                channels=[96, 192, 384, 768],
+                strides=[2, 2, 2, 2]
+            )
+        else:
+            self.patch_embed = PatchEmbed(
+                img_size=img_size[0],
+                patch_size=patch_size,
+                in_chans=in_chans,
+                embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
         # --
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim), requires_grad=False)
@@ -488,18 +497,24 @@ def vit_small(patch_size=16, **kwargs):
 
 
 def vit_base(patch_size=16, use_register=False,
-        num_registers=4, **kwargs):
+        num_registers=4, type_embed="patch", **kwargs):
+    if use_register:
+        print("Use Register!!! Base")
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_register=use_register,
-        num_registers=num_registers, **kwargs)
+        num_registers=num_registers, type_embed=type_embed, **kwargs)
     return model
 
 
-def vit_large(patch_size=16, **kwargs):
+def vit_large(patch_size=16, use_register=False,
+        num_registers=4, **kwargs):
+    if use_register:
+        print("Use Register!!! Large")
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_register=use_register,
+        num_registers=num_registers, **kwargs)
     return model
 
 

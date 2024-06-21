@@ -1,3 +1,3 @@
 python main.py \
-  --fname configs/endo_vith16_ep300_resize.yaml \
-  --devices cuda:0
+  --fname configs/endo_vith16_ep600_mae.yaml \
+  --devices cuda:1

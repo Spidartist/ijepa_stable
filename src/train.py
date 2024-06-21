@@ -21,6 +21,7 @@ import copy
 import logging
 import sys
 import yaml
+import math
 
 import numpy as np
 import wandb
@@ -79,6 +80,8 @@ def main(args, resume_preempt=False):
     pred_emb_dim = args['meta']['pred_emb_dim']
     use_register = args['meta']['use_register']
     num_registers = args['meta']['num_registers']
+    type_embed = args['meta']['type_embed']
+    use_mae = args['meta']['use_mae']
     if not torch.cuda.is_available():
         device = torch.device('cpu')
     else:
@@ -114,7 +117,7 @@ def main(args, resume_preempt=False):
 
     # -- OPTIMIZATION
     ema = args['optimization']['ema']
-    ipe_scale = args['optimization']['ipe_scale']  # scheduler scale factor (def: 1.0)
+    ipe_scale = int(args['optimization']['ipe_scale'])  # scheduler scale factor (def: 1.0)
     wd = float(args['optimization']['weight_decay'])
     final_wd = float(args['optimization']['final_weight_decay'])
     num_epochs = args['optimization']['epochs']
@@ -182,7 +185,9 @@ def main(args, resume_preempt=False):
         pred_emb_dim=pred_emb_dim,
         model_name=model_name,
         use_register=use_register,
-        num_registers=num_registers)
+        num_registers=num_registers,
+        type_embed=type_embed,
+        use_mae=use_mae)
     target_encoder = copy.deepcopy(encoder)
 
     # -- make data transforms
@@ -241,8 +246,8 @@ def main(args, resume_preempt=False):
         p.requires_grad = False
 
     # -- momentum schedule
-    momentum_scheduler = (ema[0] + i*(ema[1]-ema[0])/(ipe*num_epochs*ipe_scale)
-                          for i in range(int(ipe*num_epochs*ipe_scale)+1))
+    momentum_scheduler = (ema[0] + i*(ema[1]-ema[0])/(ipe*num_epochs/ipe_scale)
+                          for i in range(int(num_epochs*math.ceil(ipe/ipe_scale))+1))
 
     start_epoch = 0
     # -- load training checkpoint
@@ -255,7 +260,7 @@ def main(args, resume_preempt=False):
             target_encoder=target_encoder,
             opt=optimizer,
             scaler=scaler)
-        for _ in range(start_epoch*ipe):
+        for _ in range(int(start_epoch*ipe/ipe_scale)):
             scheduler.step()
             wd_scheduler.step()
             next(momentum_scheduler)
@@ -289,7 +294,7 @@ def main(args, resume_preempt=False):
         time_meter = AverageMeter()
 
         for itr, (udata, masks_enc, masks_pred) in enumerate(unsupervised_loader):
-
+            # print(itr)
             def load_imgs():
                 # -- unsupervised imgs
                 imgs = udata.to(device, non_blocking=True)
@@ -300,9 +305,13 @@ def main(args, resume_preempt=False):
             maskA_meter.update(len(masks_enc[0][0]))
             maskB_meter.update(len(masks_pred[0][0]))
 
-            def train_step():
-                _new_lr = scheduler.step()
-                _new_wd = wd_scheduler.step()
+            def train_step(iter, max_iter):
+                if ((iter + 1) % ipe_scale == 0) or (iter + 1 == max_iter):
+                    _new_lr = scheduler.step()
+                    _new_wd = wd_scheduler.step()
+                else:
+                    _new_lr = 0
+                    _new_wd = 0
                 # --
 
                 def forward_target():
@@ -330,64 +339,68 @@ def main(args, resume_preempt=False):
                     h = forward_target()
                     z = forward_context()
                     loss = loss_fn(z, h)
+                    loss = loss / ipe_scale
 
                 #  Step 2. Backward & step
-                if use_bfloat16:
-                    scaler.scale(loss).backward()
+                scaler.scale(loss).backward()
+
+                grad_stats = grad_logger(encoder.named_parameters())
+                if ((iter + 1) % ipe_scale == 0) or (iter + 1 == max_iter):
                     scaler.step(optimizer)
                     scaler.update()
-                else:
-                    loss.backward()
-                    optimizer.step()
-                grad_stats = grad_logger(encoder.named_parameters())
-                optimizer.zero_grad()
-
-                # Step 3. momentum update of target encoder
-                with torch.no_grad():
-                    m = next(momentum_scheduler)
-                    for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
-                        param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
+                    optimizer.zero_grad()
+                    # Step 3. momentum update of target encoder
+                    with torch.no_grad():
+                        m = next(momentum_scheduler)
+                        for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
+                            param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
 
                 return (float(loss), _new_lr, _new_wd, grad_stats)
-            (loss, _new_lr, _new_wd, grad_stats), etime = gpu_timer(train_step)
+            # if ((itr + 1) % ipe_scale == 0) or (itr + 1 == len(unsupervised_loader)):
+            (loss, _new_lr, _new_wd, grad_stats), etime = gpu_timer(train_step, iter=itr, max_iter=len(unsupervised_loader))
             loss_meter.update(loss)
             time_meter.update(etime)
 
             # -- Logging
             def log_stats():
-                csv_logger.log(epoch + 1, itr, loss, maskA_meter.val, maskB_meter.val, etime)
-                if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
-                    logger.info('[%d, %5d] loss: %.3f '
-                                'masks: %.1f %.1f '
-                                '[wd: %.2e] [lr: %.2e] '
-                                '[mem: %.2e] '
-                                '(%.1f ms)'
-                                % (epoch + 1, itr,
-                                   loss_meter.avg,
-                                   maskA_meter.avg,
-                                   maskB_meter.avg,
-                                   _new_wd,
-                                   _new_lr,
-                                   torch.cuda.max_memory_allocated() / 1024.**2,
-                                   time_meter.avg))
-
-                    wandb.log(
-                        {
-                            "epoch": epoch + 1,
-                            "loss": loss_meter.avg,
-                            "wd": _new_wd,
-                            "lr": _new_lr,
-                        }
-                    )
-
-                    if grad_stats is not None:
-                        logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
+                if ((itr + 1) % ipe_scale == 0) or (itr + 1 == len(unsupervised_loader)):
+                    # print("Hehe")
+                    csv_logger.log(epoch + 1, itr, loss, maskA_meter.val, maskB_meter.val, etime)
+                    # print(f"((itr + 1) % log_freq: ({itr} + 1) % {log_freq}")
+                    # print("Hoho")
+                    if ((itr + 1) % (log_freq*ipe_scale) == 0) or np.isnan(loss) or np.isinf(loss):
+                        # print("Haha")
+                        logger.info('[%d, %5d] loss: %.3f '
+                                    'masks: %.1f %.1f '
+                                    '[wd: %.2e] [lr: %.2e] '
+                                    '[mem: %.2e] '
+                                    '(%.1f ms)'
                                     % (epoch + 1, itr,
-                                       grad_stats.first_layer,
-                                       grad_stats.last_layer,
-                                       grad_stats.min,
-                                       grad_stats.max))
+                                    loss_meter.avg,
+                                    maskA_meter.avg,
+                                    maskB_meter.avg,
+                                    _new_wd,
+                                    _new_lr,
+                                    torch.cuda.max_memory_allocated() / 1024.**2,
+                                    time_meter.avg))
+                        # print("Haha")
+                        wandb.log(
+                            {
+                                "epoch": epoch + 1,
+                                "loss": loss_meter.avg,
+                                "wd": _new_wd,
+                                "lr": _new_lr,
+                            }
+                        )
 
+                        if grad_stats is not None:
+                            logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
+                                        % (epoch + 1, itr,
+                                        grad_stats.first_layer,
+                                        grad_stats.last_layer,
+                                        grad_stats.min,
+                                        grad_stats.max))
+            # print(f"((itr + 1) % ipe_scale: ({itr} + 1) % {ipe_scale}")
             log_stats()
 
             assert not np.isnan(loss), 'loss is nan'

@@ -73,13 +73,16 @@ def init_model(
     pred_depth=6,
     pred_emb_dim=384,
     use_register=False,
-    num_registers=4
+    num_registers=4,
+    type_embed="patch",
+    use_mae=False
 ):
     encoder = vit.__dict__[model_name](
         img_size=[crop_size],
         patch_size=patch_size,
         use_register=use_register,
-        num_registers=num_registers)
+        num_registers=num_registers,
+        type_embed=type_embed)
     predictor = vit.__dict__['vit_predictor'](
         num_patches=encoder.patch_embed.num_patches,
         embed_dim=encoder.embed_dim,
@@ -105,8 +108,24 @@ def init_model(
     encoder.to(device)
     predictor.to(device)
     logger.info(encoder)
+
+    if use_mae:
+        encoder, predictor = load_mae_ckpt(encoder, predictor)
     return encoder, predictor
 
+def load_mae_ckpt(encoder, predictor):
+    ckpt = torch.load("/mnt/quanhd/ijepa_endoscopy_pretrained/mae_pretrain_vit_base.pth")
+    del ckpt["model"]["cls_token"]
+
+    ckpt["model"]["pos_embed"] = ckpt["model"]["pos_embed"][:, 1:, :]
+    encoder.load_state_dict(ckpt["model"])
+    print("Loaded mae checkpoint!!!")
+
+    ckpt = torch.load("/mnt/quanhd/ijepa_stable/logs_final/jepa-latest.pth.tar")
+    predictor.load_state_dict(ckpt["predictor"])
+    print("Loaded old ijepa predictor checkpoint!!!")
+
+    return encoder, predictor
 
 def init_opt(
     encoder,
@@ -146,15 +165,15 @@ def init_opt(
     optimizer = torch.optim.AdamW(param_groups)
     scheduler = WarmupCosineSchedule(
         optimizer,
-        warmup_steps=int(warmup*iterations_per_epoch),
+        warmup_steps=int(warmup*iterations_per_epoch/ipe_scale),
         start_lr=start_lr,
         ref_lr=ref_lr,
         final_lr=final_lr,
-        T_max=int(ipe_scale*num_epochs*iterations_per_epoch))
+        T_max=int(num_epochs*iterations_per_epoch/ipe_scale))
     wd_scheduler = CosineWDSchedule(
         optimizer,
         ref_wd=wd,
         final_wd=final_wd,
-        T_max=int(ipe_scale*num_epochs*iterations_per_epoch))
+        T_max=int(num_epochs*iterations_per_epoch/ipe_scale))
     scaler = torch.cuda.amp.GradScaler() if use_bfloat16 else None
     return optimizer, scaler, scheduler, wd_scheduler
